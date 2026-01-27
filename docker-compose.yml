@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # 백엔드 서비스 (FastAPI)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: elbix-aidd-backend
+    restart: unless-stopped
+    environment:
+      - DEBUG=${DEBUG:-False}
+      - SECRET_KEY=${SECRET_KEY:-elbix-aidd-secret-key-2026}
+      # 배포 시 프론트 접속 주소(Origin)를 반드시 포함해야 세션/쿠키가 동작함. 쉼표 구분.
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:80,http://127.0.0.1:3000,http://stlogic.aidd.co.kr,http://192.168.0.64,http://192.168.0.64:80}
+      - SESSION_HTTPS_ONLY=${SESSION_HTTPS_ONLY:-False}
+      - GIS_WFS_URL=${GIS_WFS_URL:-http://192.168.0.71:8881/orange/wfs?GDX=AI_FAC.xml}
+      - BASE_WFS_URL=${BASE_WFS_URL:-http://192.168.0.71:8881/orange/wfs?GDX=AI_BASE.xml}
+      - EPS_BASE_URL=${EPS_BASE_URL:-http://192.168.0.71:8881/ai/}
+    ports:
+      - "8000:8000"
+    networks:
+      - elbix-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/auth/me"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 프론트엔드 서비스 (React + Vite)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: elbix-aidd-frontend
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-/api/v1}
+    networks:
+      - elbix-network
+    depends_on:
+      - backend
+
+  # Nginx 리버스 프록시
+  nginx:
+    image: nginx:alpine
+    container_name: elbix-aidd-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      - elbix-network
+    depends_on:
+      - frontend
+      - backend
+
+networks:
+  elbix-network:
+    driver: bridge

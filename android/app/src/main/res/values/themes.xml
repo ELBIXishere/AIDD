@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ELBIX AIDD 테마 -->
+<resources>
+
+    <!-- Compose 앱용 기본 테마 (Splash 화면에서만 사용) -->
+    <style name="Theme.ElbixAIDD" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Edge-to-edge 대응 -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+</resources>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 네트워크 보안 설정 -->
+<!-- 개발용 HTTP 서버 허용 (프로덕션에서는 HTTPS 사용 권장) -->
+<network-security-config>
+    <!-- 기본적으로 cleartext 차단 -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    
+    <!-- 개발 서버 IP에 대해 HTTP 허용 -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">192.168.0.64</domain>
+        <domain includeSubdomains="true">192.168.0.71</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain> <!-- Android 에뮬레이터 localhost -->
+        <domain includeSubdomains="true">localhost</domain>
+    </domain-config>
+</network-security-config>

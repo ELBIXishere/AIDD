@@ -1,0 +1,34 @@
+# ELBIX AIDD - AI 기반 배전 설계 자동화 시스템
+# Python 3.9+
+
+# Web Framework
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+
+# HTTP Client (비동기 지원)
+httpx>=0.24.0
+aiohttp>=3.9.0
+
+# 좌표 변환
+pyproj>=3.6.0
+
+# 기하학 연산
+shapely>=2.0.0
+
+# 그래프 알고리즘
+networkx>=3.1
+
+# 데이터 검증
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# 유틸리티
+python-dotenv>=1.0.0
+numpy>=1.24.0
+
+# 성능 최적화
+cachetools>=5.3.0
+rtree>=1.0.0
+
+# 세션 관리
+itsdangerous>=2.1.0

@@ -1,0 +1,108 @@
+/* OpenLayers 지도 커스텀 스타일 */
+
+/* 줌 컨트롤 */
+.ol-zoom {
+  top: auto !important;
+  bottom: 80px !important;
+  right: 10px !important;
+  left: auto !important;
+}
+
+.ol-zoom-slider {
+  top: auto !important;
+  bottom: 140px !important;
+  right: 10px !important;
+  left: auto !important;
+}
+
+/* 스케일 바 */
+.ol-scale-line {
+  background-color: rgba(30, 41, 59, 0.8) !important;
+  border-radius: 4px !important;
+  padding: 2px 8px !important;
+  bottom: 10px !important;
+  left: auto !important;
+  right: 10px !important;
+}
+
+.ol-scale-line-inner {
+  border-color: #94a3b8 !important;
+  color: #f1f5f9 !important;
+  font-size: 11px !important;
+}
+
+/* 속성 정보 */
+.ol-attribution {
+  background-color: rgba(30, 41, 59, 0.8) !important;
+  border-radius: 4px !important;
+  font-size: 10px !important;
+}
+
+.ol-attribution a {
+  color: #60a5fa !important;
+}
+
+/* 팝업 스타일 */
+.ol-popup {
+  position: absolute;
+  background-color: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 12px;
+  min-width: 150px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+.ol-popup::before {
+  content: '';
+  position: absolute;
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 10px 10px 0;
+  border-style: solid;
+  border-color: #334155 transparent transparent;
+}
+
+.ol-popup-closer {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  cursor: pointer;
+  color: #94a3b8;
+}
+
+.ol-popup-closer:hover {
+  color: #f1f5f9;
+}
+
+/* 툴팁 */
+.ol-tooltip {
+  background-color: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #f1f5f9;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* 지도 로딩 */
+.map-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1000;
+}
+
+/* 클릭 커서 */
+.ol-viewport {
+  cursor: crosshair !important;
+}
+
+/* 피처 호버 */
+.ol-viewport.feature-hover {
+  cursor: pointer !important;
+}

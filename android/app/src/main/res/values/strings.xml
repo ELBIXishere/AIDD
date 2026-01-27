@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ELBIX AIDD 문자열 리소스 -->
+<resources>
+    <string name="app_name">ELBIX AIDD</string>
+    <string name="app_description">AI 기반 배전 설계 자동화 시스템</string>
+    
+    <!-- 메뉴 -->
+    <string name="menu_map">지도</string>
+    <string name="menu_design">설계</string>
+    <string name="menu_facilities">시설물</string>
+    <string name="menu_settings">설정</string>
+    
+    <!-- 지도 -->
+    <string name="map_layer_poles">전주</string>
+    <string name="map_layer_lines">전선</string>
+    <string name="map_layer_transformers">변압기</string>
+    <string name="map_layer_roads">도로</string>
+    <string name="map_layer_buildings">건물</string>
+    
+    <!-- 설계 -->
+    <string name="design_title">배전 설계</string>
+    <string name="design_select_location">수용가 위치 선택</string>
+    <string name="design_phase_single">단상</string>
+    <string name="design_phase_three">3상</string>
+    <string name="design_request">설계 요청</string>
+    <string name="design_processing">설계 처리 중…\n(시설물 데이터 분석 및 경로 계산 중)\n잠시만 기다려주세요</string>
+    
+    <!-- 결과 -->
+    <string name="result_title">설계 결과</string>
+    <string name="result_route">경로 %d</string>
+    <string name="result_cost">예상 공사비</string>
+    <string name="result_distance">총 거리</string>
+    <string name="result_new_poles">신설 전주</string>
+    <string name="result_voltage_drop">전압 강하</string>
+    
+    <!-- 단위 -->
+    <string name="unit_won">원</string>
+    <string name="unit_meter">m</string>
+    <string name="unit_count">개</string>
+    <string name="unit_percent">%</string>
+    
+    <!-- 에러 -->
+    <string name="error_network">네트워크 오류가 발생했습니다</string>
+    <string name="error_location">위치를 선택해주세요</string>
+    <string name="error_no_route">경로를 찾을 수 없습니다</string>
+</resources>

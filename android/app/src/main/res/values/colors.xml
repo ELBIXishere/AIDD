@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ELBIX AIDD 색상 리소스 -->
+<resources>
+    <!-- 메인 색상 (전력 관련 파란색 테마) -->
+    <color name="primary">#1976D2</color>
+    <color name="primary_dark">#1565C0</color>
+    <color name="primary_light">#42A5F5</color>
+    <color name="accent">#FF9800</color>
+    
+    <!-- 기본 색상 -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="gray_light">#F5F5F5</color>
+    <color name="gray">#9E9E9E</color>
+    <color name="gray_dark">#616161</color>
+    
+    <!-- 상태 색상 -->
+    <color name="success">#4CAF50</color>
+    <color name="warning">#FF9800</color>
+    <color name="error">#F44336</color>
+    <color name="info">#2196F3</color>
+    
+    <!-- 경로 색상 (순위별) -->
+    <color name="route_1">#4CAF50</color>  <!-- 1순위: 초록 -->
+    <color name="route_2">#2196F3</color>  <!-- 2순위: 파랑 -->
+    <color name="route_3">#FF9800</color>  <!-- 3순위: 주황 -->
+    <color name="route_4">#9C27B0</color>  <!-- 4순위: 보라 -->
+    <color name="route_5">#607D8B</color>  <!-- 5순위: 회색 -->
+    
+    <!-- 시설물 색상 -->
+    <color name="pole_existing">#1976D2</color>  <!-- 기설 전주: 파랑 -->
+    <color name="pole_new">#4CAF50</color>       <!-- 신설 전주: 초록 -->
+    <color name="line_hv">#F44336</color>        <!-- 고압선: 빨강 -->
+    <color name="line_lv">#2196F3</color>        <!-- 저압선: 파랑 -->
+    <color name="transformer">#FF9800</color>    <!-- 변압기: 주황 -->
+    <color name="consumer">#E91E63</color>       <!-- 수용가: 분홍 -->
+</resources>
