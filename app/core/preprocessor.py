@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from shapely.geometry import Point, LineString, Polygon, shape
 from shapely.ops import unary_union
 import logging
+import re
 
 from app.config import settings
 from app.utils.profiler import profile, profile_block
@@ -24,11 +25,16 @@ class Pole:
     coord: Tuple[float, float]       # 좌표 (x, y)
     pole_type: Optional[str] = None  # 전주 타입 (H: 고압, L: 저압, G: 지지주)
     phase_code: Optional[str] = None # 상 코드 (1: 단상, 3: 3상)
+    voltage: Optional[float] = None  # [NEW] 실제 전압값 (V) - DB의 VOLT_VAL
+    has_transformer: bool = False    # [NEW] 변압기 보유 여부 (공간 매핑 결과)
     properties: Dict[str, Any] = field(default_factory=dict)  # 기타 속성
     
     @property
     def is_high_voltage(self) -> bool:
         """고압 전주 여부"""
+        # voltage 값이 있으면 우선 판단
+        if self.voltage is not None:
+            return self.voltage >= 1000
         return self.pole_type == "H"
     
     @property
@@ -50,13 +56,19 @@ class Line:
     coords: List[Tuple[float, float]]  # 좌표 리스트
     line_type: Optional[str] = None  # 전선 타입 (H: 고압, L: 저압)
     phase_code: Optional[str] = None # 상 코드
+    wire_spec: Optional[str] = None  # [NEW] 전선 규격 (예: ACSR_160, OW_22)
+    voltage: Optional[float] = None  # [NEW] 실제 전압값 (V)
     start_pole_id: Optional[str] = None  # 시작 전주 ID
     end_pole_id: Optional[str] = None    # 끝 전주 ID
+    is_obstacle: bool = True         # 교차 검증 대상 여부
+    is_service_drop: bool = False    # 인입선 여부 (교차 허용 대상)
     properties: Dict[str, Any] = field(default_factory=dict)
     
     @property
     def is_high_voltage(self) -> bool:
         """고압 전선 여부"""
+        if self.voltage is not None:
+            return self.voltage >= 1000
         # HV, H, 고압 등 다양한 형식 지원
         return self.line_type in ("H", "HV", "고압")
     
@@ -94,10 +106,23 @@ class Building:
 
 
 @dataclass
+class Transformer:
+    """변압기 데이터 클래스"""
+    id: str
+    geometry: Point
+    coord: Tuple[float, float]
+    capacity_kva: float = 0.0
+    phase_code: str = "1"
+    pole_id: Optional[str] = None
+    properties: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ProcessedData:
     """전처리된 데이터 컨테이너 (지연 로딩 적용)"""
     poles: List[Pole] = field(default_factory=list)
     lines: List[Line] = field(default_factory=list)
+    transformers: List[Transformer] = field(default_factory=list)  # [NEW]
     roads: List[Road] = field(default_factory=list)
     buildings: List[Building] = field(default_factory=list)
     
@@ -164,8 +189,12 @@ class ProcessedData:
         self._three_phase_poles = None
 
 
+# [GLOBAL CACHE] 전주 계통 분석 결과 메모리 상주 (최대 1GB 내외 활용 가능)
+# 구조: { pole_id: {"type": "H", "phase": "3"} }
+_POLE_INTELLIGENCE_CACHE: Dict[str, Dict[str, str]] = {}
+
 class DataPreprocessor:
-    """데이터 전처리기 (성능 최적화)"""
+    """데이터 전처리기 (성능 및 메모리 최적화)"""
     
     def __init__(self):
         self.processed_data: Optional[ProcessedData] = None
@@ -179,8 +208,9 @@ class DataPreprocessor:
             raw_data: WFS에서 조회한 원시 데이터
                 {
                     "poles": [...],
-                    "lines": [...],
-                    "transformers": [...],  # 변압기/인입선 (저압선 포함)
+                    "lines_hv": [...],
+                    "lines_lv": [...],
+                    "transformers": [...],
                     "roads": [...],
                     "buildings": [...]
                 }
@@ -193,7 +223,8 @@ class DataPreprocessor:
         # 원시 데이터 개수 기록
         result.raw_counts = {
             "poles": len(raw_data.get("poles", [])),
-            "lines": len(raw_data.get("lines", [])),
+            "lines_hv": len(raw_data.get("lines_hv", [])),
+            "lines_lv": len(raw_data.get("lines_lv", [])),
             "transformers": len(raw_data.get("transformers", [])),
             "roads": len(raw_data.get("roads", [])),
             "buildings": len(raw_data.get("buildings", []))
@@ -201,22 +232,25 @@ class DataPreprocessor:
         
         # 각 레이어 전처리
         result.poles = self._process_poles(raw_data.get("poles", []))
-        result.lines = self._process_lines(raw_data.get("lines", []))
+        
+        # 전선 처리 (HV/LV 분리)
+        hv_lines = self._process_hv_lines(raw_data.get("lines_hv", []))
+        lv_lines = self._process_lv_lines(raw_data.get("lines_lv", []))
+        result.lines = hv_lines + lv_lines
+        
+        # 변압기 처리
+        result.transformers = self._process_transformers(raw_data.get("transformers", []))
+        
         result.roads = self._process_roads(raw_data.get("roads", []))
         result.buildings = self._process_buildings(raw_data.get("buildings", []))
-        
-        # 변압기 레이어에서 저압선 추출 및 통합
-        lv_lines = self._extract_lv_lines_from_transformers(raw_data.get("transformers", []))
-        if lv_lines:
-            logger.info(f"변압기 레이어에서 저압선 {len(lv_lines)}개 추출")
-            result.lines.extend(lv_lines)
         
         # 필터링 후 개수 기록
         result.filtered_counts = {
             "poles": len(result.poles),
             "lines": len(result.lines),
-            "lines_hv": len([l for l in result.lines if l.is_high_voltage]),
-            "lines_lv": len([l for l in result.lines if not l.is_high_voltage]),
+            "lines_hv": len(hv_lines),
+            "lines_lv": len(lv_lines),
+            "transformers": len(result.transformers),
             "roads": len(result.roads),
             "buildings": len(result.buildings)
         }
@@ -230,11 +264,69 @@ class DataPreprocessor:
         # 전선-전주 공간 연결 (연결 ID가 없는 경우)
         self._link_lines_to_poles(result.lines, result.poles)
         
+        # [NEW] 변압기-전주 공간 연결 (ID 링크 부재 대응)
+        self._link_transformers_to_poles(result.transformers, result.poles)
+        
+        # [NEW] 반경 2.5m 공간 분석을 통한 전주 계통 정보(HV/LV/상) 복원
+        self._enrich_pole_data_spatially(result.poles, result.lines, radius=2.5)
+        
         self.processed_data = result
         
         logger.info(f"데이터 전처리 완료: {result.filtered_counts}")
         
         return result
+
+    def _enrich_pole_data_spatially(self, poles: List[Pole], lines: List[Line], radius: float = 2.5):
+        """
+        [최적화] 글로벌 캐시 및 공간 인덱스를 사용하여 전주 계통 정보를 초고속으로 복원합니다.
+        """
+        if not poles or not lines:
+            return
+
+        from shapely.strtree import STRtree
+        
+        # 1. 캐시에 없는 전주들만 선별
+        poles_to_analyze = [p for p in poles if p.id not in _POLE_INTELLIGENCE_CACHE]
+        
+        # 모든 전주에 대해 캐시 데이터 우선 적용
+        for p in poles:
+            if p.id in _POLE_INTELLIGENCE_CACHE:
+                cached = _POLE_INTELLIGENCE_CACHE[p.id]
+                p.pole_type = cached["type"]
+                p.phase_code = cached["phase"]
+
+        if not poles_to_analyze:
+            return
+
+        # 2. 신규 전주들에 대해서만 공간 분석 수행
+        line_geoms = [l.geometry for l in lines]
+        tree = STRtree(line_geoms)
+        
+        enriched_count = 0
+        for pole in poles_to_analyze:
+            nearby_indices = tree.query(pole.geometry.buffer(radius))
+            
+            nearby_hv = False
+            nearby_3phase = False
+            nearby_lv = False
+            
+            for idx in nearby_indices:
+                line = lines[idx]
+                if line.line_type == "HV": nearby_hv = True
+                else: nearby_lv = True
+                if line.phase_code == "3": nearby_3phase = True
+            
+            # 최종 타입 결정
+            p_type = "H" if nearby_hv else "L"
+            p_phase = "3" if nearby_3phase else "1"
+            
+            # 전주 객체 및 글로벌 캐시 업데이트
+            pole.pole_type = p_type
+            pole.phase_code = p_phase
+            _POLE_INTELLIGENCE_CACHE[pole.id] = {"type": p_type, "phase": p_phase}
+            enriched_count += 1
+                
+        logger.info(f"메모리 캐시 가속 적용: 신규 분석 {enriched_count}개, 캐시 활용 {len(poles) - enriched_count}개")
     
     def _process_poles(self, raw_poles: List[Dict[str, Any]]) -> List[Pole]:
         """
@@ -284,6 +376,12 @@ class DataPreprocessor:
                 pole_knd = props.get("POLE_KND_CD", "")
                 pole_type = None  # 연결된 전선으로 고압/저압 판단
                 
+                # [NEW] 전압값 파싱 (전주 레이어에는 드물게 존재할 수 있음)
+                volt_val = props.get("VOLT_VAL")
+                voltage = None
+                if volt_val and str(volt_val).isdigit() and int(volt_val) > 0:
+                    voltage = float(volt_val)
+                
                 # Pole 객체 생성
                 pole = Pole(
                     id=pole_id,
@@ -291,6 +389,7 @@ class DataPreprocessor:
                     coord=(point.x, point.y),
                     pole_type=pole_type,
                     phase_code=None,  # 전주 자체에는 상 코드가 없음, 연결된 전선으로 판단
+                    voltage=voltage,  # [NEW]
                     properties=props
                 )
                 poles.append(pole)
@@ -301,18 +400,11 @@ class DataPreprocessor:
         
         return poles
     
-    def _process_lines(self, raw_lines: List[Dict[str, Any]]) -> List[Line]:
+    def _process_hv_lines(self, raw_lines: List[Dict[str, Any]]) -> List[Line]:
         """
-        전선 데이터 전처리
-        - 철거 예정 전선 제외
-        
-        WFS 필드 매핑:
-        - GID: 전선 ID
-        - PHAR_CLCD: 상 구분 코드 (CBA/ABC/RST = 3상, A/B/C/S = 단상)
-        - LWER_FAC_GID: 시작 전주 GID
-        - UPPO_FAC_GID: 끝 전주 GID
-        - FAC_STAT_CD: 시설 상태 코드
-        - PRWR_KND_CD: 전선 종류 (고압/저압 구분)
+        고압전선 데이터 전처리 (AI_FAC_002)
+        - 무조건 HV 타입
+        - 3상/단상 구분
         """
         lines = []
         
@@ -339,80 +431,59 @@ class DataPreprocessor:
                 # 전선 ID
                 line_id = str(props.get("GID", props.get("LINE_ID", props.get("FTR_IDN", id(feature)))))
                 
-                # 상 코드 결정 (PHAR_CLCD)
-                phar_clcd = props.get("PHAR_CLCD", "")
-                if phar_clcd in ["CBA", "ABC", "RST", "3", "3P"]:
-                    phase_code = "3"  # 3상
-                elif phar_clcd and len(phar_clcd) >= 3:
-                    phase_code = "3"  # 3개 이상의 문자면 3상
-                else:
-                    phase_code = "1"  # 그 외 단상
+                # 상 코드 결정 (PHAR_CLCD) - 매핑 테이블 활용
+                phar_clcd = str(props.get("PHAR_CLCD", "")).strip().upper()
+                phase_code = settings.PHASE_MAPPING.get(phar_clcd, "1")
                 
-                # 전선 타입 결정 (고압/저압)
-                # PRWR_KND_CD: 전선 종류 코드 (H: 고압, L: 저압)
-                # VOLT_VAL: 전압값 (22900 = 고압, 220/380 = 저압)
-                prwr_knd = props.get("PRWR_KND_CD", "")
-                volt_val = props.get("VOLT_VAL", 0)
+                # 전선 규격 파싱
+                prwr_spec = str(props.get("PRWR_SPEC_CD", "")).strip()
+                wire_spec = settings.WIRE_SPEC_MAPPING.get(prwr_spec)
                 
-                # 저압 조건: 명시적으로 저압 표시되거나 전압이 1000V 미만
-                if prwr_knd in ["LV", "L", "저압"]:
-                    line_type = "LV"
-                elif volt_val and float(volt_val) < 1000:
-                    line_type = "LV"
-                else:
-                    # 기본값: 고압 (배전선로는 22.9kV가 기본)
-                    line_type = "HV"
-                
-                # 연결된 전주 ID (GID 기반)
+                # 전압값 파싱
+                volt_val = props.get("VOLT_VAL")
+                voltage = None
+                if volt_val and str(volt_val).isdigit() and int(volt_val) > 0:
+                    voltage = float(volt_val)
+
+                # 연결된 전주 ID
                 start_pole_id = props.get("LWER_FAC_GID") or props.get("ST_POLE_ID") or props.get("FR_POLE_ID")
                 end_pole_id = props.get("UPPO_FAC_GID") or props.get("ED_POLE_ID") or props.get("TO_POLE_ID")
                 
-                # 문자열 변환
-                if start_pole_id:
-                    start_pole_id = str(start_pole_id)
-                if end_pole_id:
-                    end_pole_id = str(end_pole_id)
+                if start_pole_id: start_pole_id = str(start_pole_id)
+                if end_pole_id: end_pole_id = str(end_pole_id)
                 
-                # Line 객체 생성
+                # Line 객체 생성 (HV 고정, 장애물 고정)
                 line = Line(
                     id=line_id,
                     geometry=line_geom,
                     coords=list(line_geom.coords),
-                    line_type=line_type,
+                    line_type="HV",
                     phase_code=phase_code,
+                    wire_spec=wire_spec,
+                    voltage=voltage,
                     start_pole_id=start_pole_id,
                     end_pole_id=end_pole_id,
+                    is_obstacle=True,  # 고압선은 무조건 장애물
+                    is_service_drop=False,
                     properties=props
                 )
                 lines.append(line)
                 
             except Exception as e:
-                logger.warning(f"전선 파싱 오류: {e}")
+                logger.warning(f"고압전선 파싱 오류: {e}")
                 continue
         
         return lines
     
-    def _extract_lv_lines_from_transformers(
-        self, 
-        raw_transformers: List[Dict[str, Any]]
-    ) -> List[Line]:
+    def _process_lv_lines(self, raw_lines: List[Dict[str, Any]]) -> List[Line]:
         """
-        변압기/인입선 레이어에서 저압선 추출
-        
-        [데이터 구조]
-        - 변압기 레이어(AI_FAC_003)에 저압선 정보가 포함되어 있음
-        - TEXT_GIS_ANNXN 필드에서 "OW" (Outdoor Wire) 포함 시 저압선
-        - 연결 전주 ID가 없으므로 공간 연결 필요
-        
-        WFS 필드 매핑:
-        - GID: 전선 ID
-        - TEXT_GIS_ANNXN: 전선 정보 (예: "OW 22 x 3")
-        - PHAR_CLCD: 상 구분 코드
-        - GIS_TRNSLN_PTH: 지오메트리 (인입선 경로)
+        저압전선 데이터 전처리 (AI_FAC_003)
+        - 무조건 LV 타입
+        - 인입선(DV) 여부 식별 -> 장애물 제외
         """
-        lv_lines = []
+        lines = []
         
-        for feature in raw_transformers:
+        for feature in raw_lines:
             try:
                 props = feature.get("properties", {})
                 
@@ -421,17 +492,7 @@ class DataPreprocessor:
                 if stat_cd in ["D", "R", "DD", "RR"]:
                     continue
                 
-                # TEXT_GIS_ANNXN에서 저압선 여부 판단
-                text_annxn = props.get("TEXT_GIS_ANNXN", "") or ""
-                
-                # OW (Outdoor Wire) 또는 WO가 포함되면 저압선
-                # C4, AO 등은 인입선/케이블이므로 제외하거나 별도 처리
-                is_lv_line = "OW" in text_annxn.upper() or "WO " in text_annxn.upper()
-                
-                if not is_lv_line:
-                    continue
-                
-                # 지오메트리 파싱 (GIS_TRNSLN_PTH 사용)
+                # 지오메트리 파싱
                 geom = feature.get("geometry")
                 if not geom:
                     continue
@@ -441,47 +502,126 @@ class DataPreprocessor:
                     continue
                 
                 # 전선 ID
-                line_id = str(props.get("GID", props.get("FTR_IDN", id(feature))))
+                line_id = str(props.get("GID", props.get("LINE_ID", props.get("FTR_IDN", id(feature)))))
                 
                 # 상 코드 결정
-                phar_clcd = props.get("PHAR_CLCD", "")
-                if phar_clcd in ["CBA", "ABC", "RST", "3", "3P"]:
-                    phase_code = "3"
-                elif phar_clcd and len(phar_clcd) >= 3:
-                    phase_code = "3"
-                else:
-                    phase_code = "1"
+                phar_clcd = str(props.get("PHAR_CLCD", "")).strip().upper()
+                phase_code = settings.PHASE_MAPPING.get(phar_clcd, "1")
                 
-                # 저압선으로 분류
-                line_type = "LV"
+                # 인입선 여부 판별 (PRWR_KND_CD or TEXT_GIS_ANNXN)
+                prwr_knd = str(props.get("PRWR_KND_CD", "")).upper()
+                text_annxn = str(props.get("TEXT_GIS_ANNXN", "")).upper()
                 
-                # 연결 전주 ID (변압기 레이어는 대부분 None)
-                start_pole_id = props.get("LWER_FAC_GID") or props.get("ST_POLE_ID")
-                end_pole_id = props.get("UPPO_FAC_GID") or props.get("ED_POLE_ID")
+                is_service_drop = False
+                if "DV" in prwr_knd or "인입" in prwr_knd or "DV" in text_annxn:
+                    is_service_drop = True
                 
-                if start_pole_id:
-                    start_pole_id = str(start_pole_id)
-                if end_pole_id:
-                    end_pole_id = str(end_pole_id)
+                # 장애물 여부: 인입선이면 False, 본선(OW)이면 True
+                is_obstacle = not is_service_drop
                 
-                # Line 객체 생성
+                # 연결 전주 ID
+                start_pole_id = props.get("LWER_FAC_GID")
+                end_pole_id = props.get("UPPO_FAC_GID")
+                
+                if start_pole_id: start_pole_id = str(start_pole_id)
+                if end_pole_id: end_pole_id = str(end_pole_id)
+
+                # 전선 규격
+                prwr_spec = str(props.get("PRWR_SPEC_CD", "")).strip()
+                wire_spec = settings.WIRE_SPEC_MAPPING.get(prwr_spec)
+
                 line = Line(
-                    id=f"LV_{line_id}",  # ID 접두어로 저압선 구분
+                    id=line_id,
                     geometry=line_geom,
                     coords=list(line_geom.coords),
-                    line_type=line_type,
+                    line_type="LV",
                     phase_code=phase_code,
+                    wire_spec=wire_spec,
+                    voltage=380.0 if phase_code == "3" else 220.0, # 저압 표준전압
                     start_pole_id=start_pole_id,
                     end_pole_id=end_pole_id,
+                    is_obstacle=is_obstacle,
+                    is_service_drop=is_service_drop,
                     properties=props
                 )
-                lv_lines.append(line)
+                lines.append(line)
                 
             except Exception as e:
-                logger.warning(f"저압선 추출 오류: {e}")
+                logger.warning(f"저압전선 파싱 오류: {e}")
                 continue
         
-        return lv_lines
+        return lines
+
+    def _parse_transformer_capacity(self, text_annxn: str) -> float:
+        """
+        TEXT_GIS_ANNXN 필드에서 변압기 용량 추출
+        예: '30X1|20X2' -> 30*1 + 20*2 = 70.0
+        """
+        if not text_annxn:
+            return 0.0
+        
+        total_kva = 0.0
+        # 패턴: (숫자)X(개수)
+        matches = re.findall(r'(\d+)X(\d+)', text_annxn.upper())
+        for cap, count in matches:
+            try:
+                total_kva += float(cap) * float(count)
+            except ValueError:
+                continue
+        return total_kva
+
+    def _process_transformers(self, raw_trs: List[Dict[str, Any]]) -> List[Transformer]:
+        """
+        변압기 데이터 전처리 (AI_FAC_004)
+        """
+        transformers = []
+        
+        for feature in raw_trs:
+            try:
+                props = feature.get("properties", {})
+                
+                # 철거 제외
+                stat_cd = props.get("FAC_STAT_CD", "")
+                if stat_cd in ["D", "R", "DD", "RR"]:
+                    continue
+                
+                geom = feature.get("geometry")
+                if not geom: continue
+                
+                point = shape(geom)
+                if not isinstance(point, Point): continue
+                
+                tr_id = str(props.get("GID", id(feature)))
+                
+                # 용량 파싱 (TEXT_GIS_ANNXN 우선, 없으면 CAP_KVA)
+                text_annxn = props.get("TEXT_GIS_ANNXN", "")
+                cap_kva = self._parse_transformer_capacity(text_annxn)
+                
+                if cap_kva == 0.0:
+                    val = props.get("CAP_KVA") or props.get("KVA")
+                    if val:
+                        try: cap_kva = float(val)
+                        except: pass
+                
+                # 상 정보
+                phar_clcd = str(props.get("PHAR_CLCD", "")).strip().upper()
+                phase_code = settings.PHASE_MAPPING.get(phar_clcd, "1")
+                
+                tr = Transformer(
+                    id=tr_id,
+                    geometry=point,
+                    coord=(point.x, point.y),
+                    capacity_kva=cap_kva,
+                    phase_code=phase_code,
+                    properties=props
+                )
+                transformers.append(tr)
+                
+            except Exception as e:
+                logger.warning(f"변압기 파싱 오류: {e}")
+                continue
+        
+        return transformers
     
     def _process_roads(self, raw_roads: List[Dict[str, Any]]) -> List[Road]:
         """
@@ -686,3 +826,49 @@ class DataPreprocessor:
         
         if linked_count > 0:
             logger.info(f"전선-전주 공간 연결: {linked_count}개 연결 생성")
+
+    def _link_transformers_to_poles(
+        self,
+        transformers: List[Transformer],
+        poles: List[Pole],
+        max_distance: Optional[float] = None
+    ):
+        """
+        변압기-전주 공간 연결 (Snapping)
+        ID 링크가 없는 경우 좌표 기반으로 가장 가까운 전주에 변압기 할당
+        """
+        from app.utils.coordinate import calculate_distance
+        
+        if not transformers or not poles:
+            return
+            
+        snap_dist = max_distance or settings.TRANSFORMER_SNAP_DISTANCE
+        linked_count = 0
+        
+        # 전주 좌표 맵 생성
+        pole_coords = [(p.id, p.coord, p) for p in poles]
+        
+        for tr in transformers:
+            # 이미 pole_id가 있으면 스킵 (거의 없겠지만)
+            if tr.pole_id:
+                continue
+                
+            min_dist = float('inf')
+            nearest_pole = None
+            
+            for p_id, p_coord, p_obj in pole_coords:
+                dist = calculate_distance(
+                    tr.coord[0], tr.coord[1],
+                    p_coord[0], p_coord[1]
+                )
+                if dist < min_dist and dist <= snap_dist:
+                    min_dist = dist
+                    nearest_pole = p_obj
+            
+            if nearest_pole:
+                tr.pole_id = nearest_pole.id
+                nearest_pole.has_transformer = True
+                linked_count += 1
+                
+        if linked_count > 0:
+            logger.info(f"변압기-전주 공간 연결: {linked_count}개 매핑 완료 (범위: {snap_dist}m)")

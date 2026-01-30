@@ -254,8 +254,10 @@ const MapView = forwardRef(function MapView({
           type: 'existing_pole',
           routeIndex: index,
           poleId: route.start_pole_id,
+          voltageType: route.source_voltage_type,
+          phaseCode: route.source_phase_type
         })
-        existingPoleFeature.setStyle(createExistingPoleStyle(false, index))
+        existingPoleFeature.setStyle(createExistingPoleStyle(false, index, route.source_phase_type, route.source_voltage_type))
         poleSource.addFeature(existingPoleFeature)
       }
     })
@@ -296,8 +298,10 @@ const MapView = forwardRef(function MapView({
           type: 'existing_pole',
           routeIndex: selectedRouteIndex,
           poleId: selectedRoute.start_pole_id,
+          voltageType: selectedRoute.source_voltage_type,
+          phaseCode: selectedRoute.source_phase_type
         })
-        existingPoleFeature.setStyle(createExistingPoleStyle(true, selectedRouteIndex))
+        existingPoleFeature.setStyle(createExistingPoleStyle(true, selectedRouteIndex, selectedRoute.source_phase_type, selectedRoute.source_voltage_type))
         poleSource.addFeature(existingPoleFeature)
       }
     }
@@ -344,8 +348,7 @@ const MapView = forwardRef(function MapView({
       })
     }
     
-    // 하천/기타영역 표시 (AI_BASE_001 - 실제로는 무벽건물/가설건물 등)
-    // 현재 WFS 서버에 실제 하천 데이터가 없으므로 건물 스타일로 표시
+    // 하천/기타영역 표시
     if (facilities.rivers) {
       facilities.rivers.forEach((river) => {
         const coords = river.coordinates
@@ -353,10 +356,9 @@ const MapView = forwardRef(function MapView({
           try {
             const feature = new Feature({
               geometry: new Polygon([coords]),
-              type: 'facility_building_other',  // 기타 건물로 처리
+              type: 'facility_building_other',
               id: river.id,
             })
-            // 건물 스타일 적용 (약간 다른 색상)
             feature.setStyle(createOtherBuildingStyle())
             source.addFeature(feature)
           } catch (e) {
@@ -387,7 +389,6 @@ const MapView = forwardRef(function MapView({
         const coords = railway.coordinates
         if (coords) {
           try {
-            // 철도가 폴리곤이면 외곽선으로, 선이면 그대로
             if (coords.length >= 3 && Array.isArray(coords[0])) {
               const feature = new Feature({
                 geometry: new Polygon([coords]),
@@ -404,20 +405,29 @@ const MapView = forwardRef(function MapView({
       })
     }
     
-    // 전선 표시
-    if (facilities.lines) {
+    // 전선 표시 (최적화: HV/LV 분리 렌더링)
+    const renderLine = (line, styleFn) => {
+      if (line.coordinates && line.coordinates.length >= 2) {
+        const feature = new Feature({
+          geometry: new LineString(line.coordinates),
+          type: 'facility_line',
+          lineId: line.id,
+          lineType: line.line_type,
+          phaseCode: line.phase_code,
+        })
+        feature.setStyle(styleFn(line))
+        source.addFeature(feature)
+      }
+    }
+
+    if (facilities.lines_hv && facilities.lines_lv) {
+      // 신규 방식: 분리된 데이터 사용 (속도 향상)
+      facilities.lines_hv.forEach(line => renderLine(line, () => createFacilityLineStyle('HV', line.phase_code)))
+      facilities.lines_lv.forEach(line => renderLine(line, () => createFacilityLineStyle('LV', line.phase_code)))
+    } else if (facilities.lines) {
+      // 호환성: 기존 방식
       facilities.lines.forEach((line) => {
-        if (line.coordinates && line.coordinates.length >= 2) {
-          const feature = new Feature({
-            geometry: new LineString(line.coordinates),
-            type: 'facility_line',
-            lineId: line.id,
-            lineType: line.line_type,
-            phaseCode: line.phase_code,
-          })
-          feature.setStyle(createFacilityLineStyle(line.line_type, line.phase_code))
-          source.addFeature(feature)
-        }
+        renderLine(line, () => createFacilityLineStyle(line.line_type, line.phase_code))
       })
     }
     
@@ -426,7 +436,6 @@ const MapView = forwardRef(function MapView({
       facilities.transformers.forEach((tr) => {
         const coords = tr.coordinates
         if (coords) {
-          // 좌표가 단일 점이면 Point, 배열이면 LineString
           const isPoint = !Array.isArray(coords[0])
           const feature = new Feature({
             geometry: isPoint ? new Point(coords) : new LineString(coords),
@@ -546,47 +555,53 @@ const MapView = forwardRef(function MapView({
           {showFacilities && (
             <>
               <div className="border-t border-slate-600 my-2 pt-2">
-                <span className="text-xs text-slate-500">시설물</span>
+                <span className="text-xs text-slate-500 font-bold">시설물 범례</span>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-amber-500 border-2 border-white" />
+              
+              {/* 전주 종류 */}
+              <div className="flex items-center gap-2 mb-1">
+                <div className="w-3 h-3 rounded-full bg-[#f59e0b] border border-white" />
                 <span className="text-xs text-slate-300">고압 3상 전주</span>
               </div>
+              <div className="flex items-center gap-2 mb-1">
+                <div className="w-3 h-3 rounded-full bg-[#ef4444] border border-white" />
+                <span className="text-xs text-slate-300">고압 단상 전주</span>
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-[#78716c] border border-[#d6d3d1]" />
+                <span className="text-xs text-slate-300">저압/기타 전주</span>
+              </div>
+
+              {/* 전선 종류 */}
               <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-red-500 border-2 border-white" />
-                <span className="text-xs text-slate-300">고압 전주</span>
+                <div className="w-5 h-1.5 bg-[#ef4444] rounded-full" />
+                <span className="text-xs text-slate-300">고압선 (HV)</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-2.5 h-2.5 rounded-full bg-stone-400 border border-white" />
-                <span className="text-xs text-slate-300">저압 전주</span>
+                <div className="w-5 h-1 bg-[#fbbf24] rounded-full" />
+                <span className="text-xs text-slate-300">저압선 (LV)</span>
               </div>
+
+              {/* 겹침 예시 */}
               <div className="flex items-center gap-2">
-                <div className="w-4 h-0.5 bg-red-500" />
-                <span className="text-xs text-slate-300">고압 전선</span>
+                <div className="w-5 h-1.5 bg-[#ef4444] rounded-full flex items-center justify-center">
+                  <div className="w-5 h-0.5 bg-[#fbbf24]" />
+                </div>
+                <span className="text-xs text-slate-400 text-[10px]">병가 (고압+저압)</span>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-0.5 bg-orange-400" />
-                <span className="text-xs text-slate-300">저압 전선</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-green-600 border border-white" />
+
+              {/* 변압기 */}
+              <div className="flex items-center gap-2 mt-1">
+                <div className="w-3 h-3 bg-green-600 border-2 border-white rotate-45 ml-1" />
                 <span className="text-xs text-slate-300">변압기</span>
               </div>
+
+              {/* 배경 */}
               <div className="flex items-center gap-2">
-                <div className="w-4 h-0.5 bg-slate-400" style={{ borderBottom: '2px dashed' }} />
-                <span className="text-xs text-slate-300">도로</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-3 bg-amber-200/50 border border-amber-300" />
-                <span className="text-xs text-slate-300">건물</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-3 bg-gray-300/30 border border-gray-400" />
-                <span className="text-xs text-slate-300">기타 건물</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-0.5 bg-gray-800" style={{ borderBottom: '3px dotted' }} />
-                <span className="text-xs text-slate-300">철도</span>
+                <div className="w-4 h-0.5 border-b border-dashed border-slate-500/50" />
+                <span className="text-xs text-slate-400">도로</span>
+                <div className="w-3 h-3 bg-amber-200/30 border border-amber-300/50 ml-1" />
+                <span className="text-xs text-slate-400">건물</span>
               </div>
             </>
           )}
@@ -663,23 +678,31 @@ function createNewPoleStyle(isSelected, routeIndex = 0) {
   })
 }
 
-// 기설 전주 스타일 (경로별 테두리 색상)
-function createExistingPoleStyle(isSelected, routeIndex = 0) {
+// 기설 전주 스타일 (경로별 테두리 색상 + 계통별 내부 색상)
+function createExistingPoleStyle(isSelected, routeIndex = 0, phaseCode = '1', voltageType = 'LV') {
   const colors = ['#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899']
   const borderColor = isSelected ? colors[routeIndex % colors.length] : '#94a3b8'
   
+  // 내부 색상은 시설물 전주와 동일한 계통 색상 적용
+  const isHighVoltage = voltageType === 'HV'
+  const is3Phase = phaseCode === '3'
+  
+  let fillColor = '#78716c' // 기본 저압색
+  if (isHighVoltage && is3Phase) fillColor = '#f59e0b'
+  else if (isHighVoltage) fillColor = '#ef4444'
+  
   return new Style({
     image: new CircleStyle({
-      radius: isSelected ? 12 : 7,
-      fill: new Fill({ color: '#64748b' }),
+      radius: isSelected ? 12 : 8,
+      fill: new Fill({ color: fillColor }),
       stroke: new Stroke({ 
         color: borderColor, 
-        width: isSelected ? 4 : 2 
+        width: isSelected ? 4 : 2.5 
       }),
     }),
     text: isSelected ? new Text({
       text: '기설전주',
-      offsetY: -20,
+      offsetY: -22,
       fill: new Fill({ color: '#ffffff' }),
       stroke: new Stroke({ color: '#1e293b', width: 3 }),
       font: 'bold 11px sans-serif',
@@ -689,56 +712,65 @@ function createExistingPoleStyle(isSelected, routeIndex = 0) {
 
 // 시설물 전주 스타일
 function createFacilityPoleStyle(phaseCode, poleType) {
-  // 3상 여부 확인: CBA (3상 코드) 또는 "3" 문자열
-  const is3Phase = phaseCode === 'CBA' || phaseCode === '3' || phaseCode === 3
-  // 고압 여부: H = 고압
+  // 백엔드(preprocessor)에서 정제된 값 사용
   const isHighVoltage = poleType === 'H'
+  const is3Phase = phaseCode === '3'
   
-  // 고압 3상: 주황색, 고압 단상: 빨간색, 저압: 회색
-  let fillColor, radius
+  let fillColor, radius, strokeColor, strokeWidth
+  
   if (isHighVoltage && is3Phase) {
-    fillColor = '#f59e0b'    // 주황색 (고압 3상)
-    radius = 8
+    fillColor = '#f59e0b'    // 진한 주황색 (고압 3상)
+    radius = 9
+    strokeColor = '#ffffff'
+    strokeWidth = 2.5
   } else if (isHighVoltage) {
     fillColor = '#ef4444'    // 빨간색 (고압 단상)
-    radius = 7
+    radius = 8
+    strokeColor = '#ffffff'
+    strokeWidth = 2
   } else {
-    fillColor = '#78716c'    // 회색 (저압/기타)
-    radius = 5
+    fillColor = '#78716c'    // 돌색 (저압/기타)
+    radius = 5.5
+    strokeColor = '#d6d3d1'
+    strokeWidth = 1.5
   }
   
   return new Style({
     image: new CircleStyle({
       radius: radius,
       fill: new Fill({ color: fillColor }),
-      stroke: new Stroke({ color: '#ffffff', width: 2 }),
+      stroke: new Stroke({ color: strokeColor, width: strokeWidth }),
     }),
   })
 }
 
 // 시설물 전선 스타일
 function createFacilityLineStyle(lineType, phaseCode) {
-  const isHighVoltage = lineType === 'HV' || lineType?.includes('고압')
-  const is3Phase = phaseCode === 'CBA' || phaseCode === '3' || phaseCode === 3
+  // HV/LV 단순화 (요청사항 반영)
+  const isHighVoltage = lineType === 'HV'
   
-  // 고압 3상: 주황색, 고압: 빨간색, 저압: 주황색
-  let color, width
-  if (isHighVoltage && is3Phase) {
-    color = 'rgba(245, 158, 11, 0.9)'  // 주황색 (고압 3상)
-    width = 4
-  } else if (isHighVoltage) {
-    color = 'rgba(239, 68, 68, 0.8)'   // 빨간색 (고압)
-    width = 3
+  let color, width, lineDash, zIndex
+  
+  if (isHighVoltage) {
+    color = '#ef4444'        // 빨간색 (고압)
+    width = 6                // 굵게 (바닥에 깔림)
+    lineDash = null
+    zIndex = 30
   } else {
-    color = 'rgba(251, 146, 60, 0.7)'  // 주황색 (저압)
-    width = 2
+    color = '#fbbf24'        // 노란색 (저압)
+    width = 3                // 가늘게 (고압 위에 그려짐 -> 병가 시 2중선 효과)
+    lineDash = null
+    zIndex = 31
   }
   
   return new Style({
     stroke: new Stroke({
       color: color,
       width: width,
+      lineDash: lineDash,
+      lineCap: 'round'
     }),
+    zIndex: zIndex
   })
 }
 
@@ -749,19 +781,19 @@ function createTransformerStyle() {
       fill: new Fill({ color: '#16a34a' }),  // 녹색
       stroke: new Stroke({ color: '#ffffff', width: 2 }),
       points: 4,
-      radius: 8,
-      angle: Math.PI / 4,  // 45도 회전하여 다이아몬드 형태
+      radius: 9,
+      angle: Math.PI / 4,
     }),
   })
 }
 
-// 도로 스타일 (회색 점선)
+// 도로 스타일 (가장 연하게 톤다운)
 function createRoadStyle() {
   return new Style({
     stroke: new Stroke({
-      color: 'rgba(156, 163, 175, 0.7)',  // 회색
-      width: 2,
-      lineDash: [8, 4],  // 점선
+      color: 'rgba(148, 163, 184, 0.4)',  // 매우 연한 블루그레이
+      width: 1.5,                         // 전선보다 가늘게
+      lineDash: [4, 4],                   // 짧은 점선
     }),
   })
 }

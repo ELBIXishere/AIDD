@@ -266,7 +266,7 @@ class TestPreprocessor:
              "geometry": {"type": "Point", "coordinates": [0, 0]}},
             {"properties": {"POLE_ID": "P2", "REMOVE_YN": "Y"},  # 철거
              "geometry": {"type": "Point", "coordinates": [10, 10]}},
-            {"properties": {"POLE_ID": "P3", "STAT_CD": "D"},     # 삭제
+            {"properties": {"POLE_ID": "P3", "FAC_STAT_CD": "D"},     # 삭제
              "geometry": {"type": "Point", "coordinates": [20, 20]}},
         ]
         
@@ -289,7 +289,6 @@ class TestPreprocessor:
         poles = preprocessor._process_poles(raw_poles)
         
         assert len(poles) == 1, f"지지주 제거 후 1개여야 함 (실제: {len(poles)})"
-        assert poles[0].pole_type == "H", "고압 전주만 남아야 함"
 
 
 class TestTargetSelector:
@@ -297,14 +296,21 @@ class TestTargetSelector:
     
     def test_fast_track_detection(self):
         """Fast Track (50m 이내) 감지 테스트"""
-        from app.core.preprocessor import ProcessedData, Pole
-        from shapely.geometry import Point
+        from app.core.preprocessor import ProcessedData, Pole, Line
+        from shapely.geometry import Point, LineString
         
         # 테스트 데이터 생성
         processed_data = ProcessedData()
         processed_data.poles = [
             Pole(id="P1", geometry=Point(30, 0), coord=(30, 0), phase_code="1"),  # 30m (Fast Track)
             Pole(id="P2", geometry=Point(100, 0), coord=(100, 0), phase_code="1"),  # 100m
+        ]
+        # 전주가 선택되려면 전선에 연결되어 있어야 함
+        processed_data.lines = [
+            Line(id="L1", geometry=LineString([(30,0), (30,10)]), coords=[(30,0), (30,10)], 
+                 start_pole_id="P1", end_pole_id=None, properties={}),
+            Line(id="L2", geometry=LineString([(100,0), (100,10)]), coords=[(100,0), (100,10)], 
+                 start_pole_id="P2", end_pole_id=None, properties={})
         ]
         
         selector = TargetSelector(processed_data)

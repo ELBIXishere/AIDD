@@ -40,7 +40,7 @@ class PathfindingResult:
     """전체 경로 탐색 결과"""
     consumer_coord: Tuple[float, float]
     paths: List[PathResult] = field(default_factory=list)
-    fast_track_path: Optional[PathResult] = None
+    fast_track_paths: List[PathResult] = field(default_factory=list)
     message: str = ""
 
 
@@ -87,11 +87,10 @@ class Pathfinder:
         
         paths: List[PathResult] = []
         
-        # Fast Track 경로 먼저 체크
+        # Fast Track 경로 체크 (모든 후보 유지)
         fast_track_targets = [t for t in target_poles if t.is_fast_track]
-        if fast_track_targets:
-            target = fast_track_targets[0]
-            fast_track_path = PathResult(
+        for target in fast_track_targets:
+            ft_path = PathResult(
                 target_pole_id=target.id,
                 target_node_id=f"POLE_{target.id}",
                 target_coord=target.coord,
@@ -101,9 +100,9 @@ class Pathfinder:
                 total_weight=target.distance_to_consumer,
                 is_fast_track=True
             )
-            result.fast_track_path = fast_track_path
-            paths.append(fast_track_path)
-            logger.info(f"Fast Track 경로: {target.id} ({target.distance_to_consumer:.1f}m)")
+            result.fast_track_paths.append(ft_path)
+            paths.append(ft_path)
+            logger.info(f"Fast Track 경로 추가: {target.id} ({target.distance_to_consumer:.1f}m)")
         
         # 후보 전주를 직선 거리순으로 정렬 (조기 종료 최적화)
         sorted_targets = sorted(

@@ -104,15 +104,21 @@ export async function checkHealth() {
  * 시설물 조회 API (bbox 기반) - 세션 쿠키 자동 전송
  * @param {string} bboxString - 영역 문자열 "minX,minY,maxX,maxY" (EPSG:3857)
  * @param {number} [maxFeatures=5000] - 레이어별 최대 피처 수
+ * @param {AbortSignal} [signal] - 요청 취소용 시그널
  * @returns {Promise<Object>} 시설물 데이터
  */
-export async function getFacilitiesByBbox(bboxString, maxFeatures = 5000) {
+export async function getFacilitiesByBbox(bboxString, maxFeatures = 5000, signal = null) {
   try {
     const response = await api.get('/facilities', {
-      params: { bbox: bboxString, max_features: maxFeatures }
+      params: { bbox: bboxString, max_features: maxFeatures },
+      signal: signal
     })
     return response.data
   } catch (error) {
+    if (axios.isCancel(error)) {
+      // 취소된 요청은 에러를 던지지 않음 (조용히 종료)
+      return null
+    }
     if (error.response) {
       const message = error.response.data?.detail || '시설물 조회 중 오류가 발생했습니다.'
       throw new Error(message)

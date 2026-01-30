@@ -45,28 +45,29 @@ class Settings(BaseSettings):
     # ===== WFS 레이어명 =====
     # GIS 레이어 (AI_FAC.xml)
     LAYER_POLE: str = "AI_FAC_001.GIS_LOC"            # 전주
-    LAYER_LINE: str = "AI_FAC_002.GIS_PTH"            # 전선 (경간)
-    LAYER_TRANSFORMER: str = "AI_FAC_003.GIS_PTH"     # 변압기/인입선
+    LAYER_LINE_HV: str = "AI_FAC_002.GIS_PTH"         # 고압전선 (HV)
+    LAYER_LINE_LV: str = "AI_FAC_003.GIS_PTH"         # 저압전선 (LV)
+    LAYER_TRANSFORMER: str = "AI_FAC_004.GIS_LOC"     # 변압기 (가공뱅크)
     
     # GIS 지오메트리 필드
     GEOM_POLE: str = "GIS_LOC"
     GEOM_LINE: str = "GIS_PTH"
+    GEOM_TRANSFORMER: str = "GIS_LOC"  # 변압기는 Point(LOC)
     
     # BASE 레이어 (AI_BASE.xml)
     # 주의: 실제 WFS 서버 데이터 기준 매핑
     LAYER_ROAD: str = "AI_BASE_002.GIS_PTH_VAL"       # 도로 (RD_NM 속성)
     LAYER_BUILDING: str = "AI_BASE_004.GIS_AREA_VAL"  # 건물 (GIS_BLD_CL_NM 속성)
     LAYER_RAILWAY: str = "AI_BASE_003.GIS_AREA_VAL"   # 철도
-    LAYER_RIVER: str = "AI_BASE_001.GIS_AREA_VAL"     # 하천/기타 영역
+    LAYER_RIVER: str = "AI_BASE_001.GIS_AREA_VAL"     # 하천
+    LAYER_LAKE: str = "AI_BASE_006.GIS_AREA_VAL"      # 수부경계(호수)
     
     # BASE 지오메트리 필드
     GEOM_ROAD: str = "GIS_PTH_VAL"
     GEOM_BUILDING: str = "GIS_AREA_VAL"
     GEOM_RAILWAY: str = "GIS_AREA_VAL"     # 철도
     GEOM_RIVER: str = "GIS_AREA_VAL"       # 하천
-    
-    # GIS 변압기 지오메트리 필드
-    GEOM_TRANSFORMER: str = "GIS_PTH"
+    GEOM_LAKE: str = "GIS_AREA_VAL"        # 호수
     
     # ===== 설계 제약조건 상수 =====
     # 최대 거리 제한 (수용가 ~ 기설전주)
@@ -76,10 +77,13 @@ class Settings(BaseSettings):
     BBOX_SIZE: float = 400.0  # meters (400m x 400m)
     
     # Fast Track 거리 (외선 불요 판단)
-    FAST_TRACK_DISTANCE: float = 50.0  # meters
+    FAST_TRACK_DISTANCE: float = 40.0  # meters
     
     # 전주 배치 간격
     POLE_INTERVAL: float = 40.0  # meters
+    
+    # 변압기-전주 공간 매핑 임계 거리
+    TRANSFORMER_SNAP_DISTANCE: float = 2.0  # meters
     
     # 첫 전주 최대 거리 (수용가로부터)
     FIRST_POLE_MAX_DISTANCE: float = 30.0  # meters
@@ -191,6 +195,39 @@ class Settings(BaseSettings):
     # ===== 상(Phase) 코드 =====
     PHASE_SINGLE: str = "1"   # 단상
     PHASE_THREE: str = "3"    # 3상
+    
+    # ===== DB 매핑 (WFS Code -> App Internal) =====
+    # 상(Phase) 매핑 (PHAR_CLCD -> "1" or "3")
+    PHASE_MAPPING: Dict[str, str] = {
+        # 3상
+        "ABC": "3", "CBA": "3", "BCA": "3", "CAB": "3", 
+        "ACB": "3", "BAC": "3", "RST": "3", "STR": "3",
+        "ZZZ": "3", "3": "3",
+        # 단상
+        "A": "1", "B": "1", "C": "1", "N": "1",
+        "AN": "1", "BN": "1", "CN": "1", "1": "1"
+    }
+
+    # 전선 규격 매핑 (PRWR_SPEC_CD -> WireSpec Enum Value)
+    # 키는 문자열로 처리 (DB에서 문자로 올 수 있음)
+    WIRE_SPEC_MAPPING: Dict[str, str] = {
+        # ACSR
+        "160": "ACSR_160", "95": "ACSR_95", "58": "ACSR_58",
+        # OW
+        "38": "OW_38", "22": "OW_22",
+        # 매핑되지 않는 코드는 기본값(OW_22 등) 처리 예정
+    }
+
+    # 전선 종류 매핑 (PRWR_KND_CD -> "HV" or "LV")
+    WIRE_KIND_MAPPING: Dict[str, str] = {
+        # 고압
+        "HV": "HV", "H": "HV", "고압": "HV", 
+        "EC": "HV", "EW": "HV", "AL-OC": "HV", "ACSR": "HV",
+        # 저압
+        "LV": "LV", "L": "LV", "저압": "LV",
+        "OW": "LV", "DV": "LV", "TW": "LV", "ZZ": "LV",
+        "AO": "LV", "OC": "LV"
+    }
     
     # ===== 경로 평가 점수 가중치 (PRD 4.2) =====
     SCORE_WEIGHT_POLE: int = 10000       # 전주당 점수

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import MapView from './components/Map/MapView'
 import ControlPanel from './components/Panel/ControlPanel'
 import ResultPanel from './components/Panel/ResultPanel'
@@ -7,7 +7,7 @@ import Toast from './components/common/Toast'
 import LoginPage from './components/Auth/LoginPage'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { useDesign } from './hooks/useDesign'
-import { getFacilitiesByBbox } from './services/api'
+import { getFacilitiesByBbox, getFacilities } from './services/api'
 
 /**
  * ELBIX AIDD 메인 애플리케이션
@@ -42,166 +42,199 @@ function AppContent() {
   // 시설물 표시 여부
   const [showFacilities, setShowFacilities] = useState(false)
   
-  // 시설물 데이터
-  const [facilities, setFacilities] = useState(null)
-  
-  // 시설물 로딩 중 여부
-  const [facilitiesLoading, setFacilitiesLoading] = useState(false)
-  
-  // 비용 상세 모달 상태
-  const [costModalRoute, setCostModalRoute] = useState(null)
-  
-  // 현재 뷰포트 bbox
-  const [currentBbox, setCurrentBbox] = useState(null)
-  
-  // 저장된 경로 목록
-  const [savedRoutes, setSavedRoutes] = useState([])
-  
-  // 지도 참조
-  const mapRef = useRef(null)
-  
-  // 설계 API 훅
-  const { 
-    loading, 
-    result, 
-    error, 
-    runDesign, 
-    clearResult 
-  } = useDesign()
-  
-  // 지도 클릭 핸들러
-  const handleMapClick = useCallback((coord) => {
-    setConsumerCoord(coord)
-    clearResult()
-    setSelectedRouteIndex(0)
-  }, [clearResult])
-  
-  // 좌표 선택 취소 핸들러
-  const handleClearCoord = useCallback(() => {
-    setConsumerCoord(null)
-    clearResult()
-    setSelectedRouteIndex(0)
-  }, [clearResult])
-  
-  // 설계 실행 핸들러
-  const handleRunDesign = useCallback(async () => {
-    if (!consumerCoord) {
-      setToast({ type: 'warning', message: '지도에서 수용가 위치를 선택하세요' })
-      return
-    }
+    // 시설물 데이터 및 요청 관리
+    const [facilities, setFacilities] = useState(null)
+    const abortControllerRef = useRef(null)
     
-    try {
-      await runDesign(consumerCoord, phaseCode)
+    // 시설물 로딩 중 여부
+    const [facilitiesLoading, setFacilitiesLoading] = useState(false)
+    
+    // 비용 상세 모달 상태
+    const [costModalRoute, setCostModalRoute] = useState(null)
+    
+    // 현재 뷰포트 bbox
+    const [currentBbox, setCurrentBbox] = useState(null)
+    
+    // 저장된 경로 목록
+    const [savedRoutes, setSavedRoutes] = useState([])
+    
+    // 지도 참조
+    const mapRef = useRef(null)
+    const autoRefreshTimerRef = useRef(null)
+    
+    // 설계 API 훅
+    const {
+      loading,
+      result,
+      error,
+      runDesign,
+      clearResult
+    } = useDesign()
+    
+    // 지도 클릭 핸들러
+    const handleMapClick = useCallback((coord) => {
+      setConsumerCoord(coord)
+      clearResult()
       setSelectedRouteIndex(0)
-    } catch (err) {
-      setToast({ type: 'error', message: err.message })
-    }
-  }, [consumerCoord, phaseCode, runDesign])
-  
-  // 좌표 직접 입력 핸들러
-  const handleCoordChange = useCallback((coord) => {
-    setConsumerCoord(coord)
-    clearResult()
-  }, [clearResult])
-  
-  // 경로 선택 핸들러
-  const handleRouteSelect = useCallback((index) => {
-    setSelectedRouteIndex(index)
-  }, [])
-  
-  // 현재 위치로 이동
-  const handleGoToCurrentLocation = useCallback(() => {
-    if (!navigator.geolocation) {
-      setToast({ type: 'warning', message: '이 브라우저에서 위치 정보를 지원하지 않습니다.' })
-      return
-    }
+    }, [clearResult])
     
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { longitude, latitude } = position.coords
-        // WGS84 → EPSG:3857 변환
-        const x = longitude * 20037508.34 / 180
-        let y = Math.log(Math.tan((90 + latitude) * Math.PI / 360)) / (Math.PI / 180)
-        y = y * 20037508.34 / 180
-        
-        if (mapRef.current) {
-          mapRef.current.panTo([x, y])
-        }
-        setToast({ type: 'success', message: '현재 위치로 이동했습니다.' })
-      },
-      (error) => {
-        setToast({ type: 'error', message: '위치 정보를 가져올 수 없습니다.' })
+    // 좌표 선택 취소 핸들러
+    const handleClearCoord = useCallback(() => {
+      setConsumerCoord(null)
+      clearResult()
+      setSelectedRouteIndex(0)
+    }, [clearResult])
+    
+    // 설계 실행 핸들러
+    const handleRunDesign = useCallback(async () => {
+      if (!consumerCoord) {
+        setToast({ type: 'warning', message: '지도에서 수용가 위치를 선택하세요' })
+        return
       }
-    )
-  }, [])
-  
-  // 시설물 로드 핸들러 (bbox 기반)
-  const handleLoadFacilities = useCallback(async (bbox) => {
-    // bbox가 제공되지 않으면 지도에서 현재 bbox 가져오기
-    const targetBbox = bbox || (mapRef.current?.getBbox?.())
+      
+      try {
+        await runDesign(consumerCoord, phaseCode)
+        setSelectedRouteIndex(0)
+      } catch (err) {
+        setToast({ type: 'error', message: err.message })
+      }
+    }, [consumerCoord, phaseCode, runDesign])
     
-    if (!targetBbox) {
-      setToast({ type: 'warning', message: '지도 영역을 확인할 수 없습니다.' })
-      return
-    }
+    // 좌표 직접 입력 핸들러
+    const handleCoordChange = useCallback((coord) => {
+      setConsumerCoord(coord)
+      clearResult()
+    }, [clearResult])
     
-    // 시설물 로드 중 표시
-    setFacilitiesLoading(true)
-    setToast({ type: 'info', message: '시설물 로드 중...' })
+    // 경로 선택 핸들러
+    const handleRouteSelect = useCallback((index) => {
+      setSelectedRouteIndex(index)
+    }, [])
     
-    try {
-      const bboxString = `${targetBbox.minX},${targetBbox.minY},${targetBbox.maxX},${targetBbox.maxY}`
-      const data = await getFacilitiesByBbox(bboxString, 5000)
-
-      setFacilities(data)
-      setShowFacilities(true)
-
-      const counts = data.count || {}
-      const summary = [
-        counts.poles > 0 && `전주 ${counts.poles}개`,
-        counts.lines > 0 && `전선 ${counts.lines}개`,
-        counts.transformers > 0 && `변압기 ${counts.transformers}개`,
-        counts.roads > 0 && `도로 ${counts.roads}개`,
-        counts.buildings > 0 && `건물 ${counts.buildings}개`,
-      ].filter(Boolean).join(', ')
-
-      setToast({
-        type: 'success',
-        message: summary ? `시설물 로드 완료: ${summary}` : '시설물 로드 완료 (데이터 없음)'
-      })
-    } catch (err) {
-      console.error('시설물 로드 오류:', err)
-      setToast({ type: 'error', message: err.message || `시설물 조회 실패` })
-    } finally {
-      setFacilitiesLoading(false)
-    }
-  }, [])
+    // 현재 위치로 이동
+    const handleGoToCurrentLocation = useCallback(() => {
+      if (!navigator.geolocation) {
+        setToast({ type: 'warning', message: '이 브라우저에서 위치 정보를 지원하지 않습니다.' })
+        return
+      }
+      
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { longitude, latitude } = position.coords
+          // WGS84 → EPSG:3857 변환
+          const x = longitude * 20037508.34 / 180
+          let y = Math.log(Math.tan((90 + latitude) * Math.PI / 360)) / (Math.PI / 180)
+          y = y * 20037508.34 / 180
+          
+          if (mapRef.current) {
+            mapRef.current.panTo([x, y])
+          }
+          setToast({ type: 'success', message: '현재 위치로 이동했습니다.' })
+        },
+        (error) => {
+          setToast({ type: 'error', message: '위치 정보를 가져올 수 없습니다.' })
+        }
+      )
+    }, [])
+    
+    // [수정] 시설물 로드 핸들러 (수용가 좌표 기준 400m 반경)
+    const handleLoadFacilities = useCallback(async (centerCoord = null, isAuto = false) => {
+      // 명시적 좌표가 없으면 현재 설정된 수용가 좌표 사용
+      const targetCoord = centerCoord || consumerCoord
+      
+      if (!targetCoord) {
+        if (!isAuto) setToast({ type: 'warning', message: '수용가 위치를 먼저 선택해주세요.' })
+        return
+      }
   
-  // 시설물 표시 토글 핸들러
-  const handleToggleFacilities = useCallback(() => {
-    if (showFacilities) {
-      // 끄기
-      setShowFacilities(false)
-    } else {
-      // 켜기 - 시설물 데이터 로드
-      handleLoadFacilities()
-    }
-  }, [showFacilities, handleLoadFacilities])
+      // 이전 요청 취소 및 새 컨트롤러 생성
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+      abortControllerRef.current = new AbortController()
+      
+      setFacilitiesLoading(true)
+      if (!isAuto) setToast({ type: 'info', message: '시설물 로드 중...' })
+      
+      try {
+        const coordStr = `${targetCoord[0]},${targetCoord[1]}`
+        // bbox_size=400 (반경이 아니라 BBox 크기이므로 반경 200m 효과, 
+        // 요구사항이 "반경 400m"라면 bbox_size=800이 되어야 함. 
+        // 하지만 기존 BBOX_SIZE 상수가 400이므로 일단 400 사용하거나 800으로 설정)
+        // 여기서는 안전하게 800 (반경 400m 커버) 사용
+        const params = { coord: coordStr, bbox_size: 800 } 
+        
+        // getFacilities (coord 기반) API 사용 (api.js에 이미 import 되어 있어야 함)
+        // import { getFacilitiesByBbox } -> import { getFacilities } 로 변경 필요
+        // 하지만 App.jsx 상단 import를 보면 getFacilitiesByBbox만 되어있을 수 있음.
+        // 따라서 api.js에서 getFacilities를 import 해야 함.
+        // 이 코드 블록은 함수 내부이므로 외부 import 구문은 별도로 수정해야 함.
+        // 일단 여기서는 기존 getFacilitiesByBbox 대신 getFacilities를 호출한다고 가정하고 작성.
+        // 실제로는 상단 import 수정이 필요함.
+        
+        // 임시: api.js의 getFacilities 함수를 사용하기 위해 동적 import 또는 상단 수정 필요.
+        // 여기서는 handleLoadFacilities를 교체하는 것이므로, 아래에서 import 문 수정도 같이 요청하겠음.
+        
+        // getFacilities는 params 객체를 받음
+        // 여기서는 getFacilities 함수가 import 되어 있다고 가정
+        const data = await getFacilities(params)
   
-  // 지도 뷰 변경 핸들러 (지도 이동/줌 완료 시)
+        // 요청이 취소되었으면 중단
+        if (!data || abortControllerRef.current.signal.aborted) return
+  
+        setFacilities(data)
+        
+        if (!isAuto) {
+          setShowFacilities(true)
+          setToast({ type: 'success', message: '시설물 로드 완료' })
+        }
+      } catch (err) {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return
+        console.error('시설물 로드 오류:', err)
+        if (!isAuto) setToast({ type: 'error', message: err.message || `시설물 조회 실패` })
+      } finally {
+        setFacilitiesLoading(false)
+      }
+    }, [consumerCoord])
+    
+    // 시설물 표시 토글 핸들러
+    const handleToggleFacilities = useCallback(() => {
+      if (showFacilities) {
+        setShowFacilities(false)
+        if (abortControllerRef.current) abortControllerRef.current.abort()
+        setFacilities(null)
+      } else {
+        if (consumerCoord) {
+            setShowFacilities(true)
+            handleLoadFacilities(consumerCoord)
+        } else {
+            setToast({ type: 'warning', message: '수용가 위치를 먼저 선택해주세요.' })
+        }
+      }
+    }, [showFacilities, consumerCoord, handleLoadFacilities])  
+  
+  // 지도 뷰 변경 핸들러 (더 이상 자동 로드에 사용되지 않음, 상태만 업데이트하거나 삭제)
   const handleViewChange = useCallback((bbox) => {
     setCurrentBbox(bbox)
-    
-    // 시설물 표시 중이고 로딩 중이 아닐 때만 자동 갱신
-    // 주의: 빈번한 API 호출을 방지하기 위해 수동 새로고침 버튼 사용 권장
   }, [])
+
+  // [수정] 수용가 좌표 변경 시 시설물 자동 로드/해제
+  useEffect(() => {
+    if (consumerCoord) {
+      setShowFacilities(true)
+      handleLoadFacilities(consumerCoord, true)
+    } else {
+      setShowFacilities(false)
+      setFacilities(null)
+    }
+  }, [consumerCoord, handleLoadFacilities])
   
   // 시설물 새로고침 핸들러
   const handleRefreshFacilities = useCallback(() => {
-    if (showFacilities) {
-      handleLoadFacilities()
+    if (showFacilities && consumerCoord) {
+      handleLoadFacilities(consumerCoord)
     }
-  }, [showFacilities, handleLoadFacilities])
+  }, [showFacilities, consumerCoord, handleLoadFacilities])
   
   // 경로 저장 핸들러
   const handleSaveRoute = useCallback((route) => {

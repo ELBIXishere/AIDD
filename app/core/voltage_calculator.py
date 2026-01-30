@@ -90,7 +90,8 @@ class VoltageCalculator:
         load_kw: float,
         phase_type: str = "1",
         wire_type: WireType = WireType.OW_22,
-        is_high_voltage: bool = False
+        is_high_voltage: bool = False,
+        voltage_override: float = None  # [NEW] 실제 전압값 (DB)
     ) -> VoltageDropResult:
         """
         전압 강하 계산
@@ -104,12 +105,20 @@ class VoltageCalculator:
             phase_type: 상 타입 ("1": 단상, "3": 3상)
             wire_type: 전선 종류
             is_high_voltage: 고압 여부
+            voltage_override: 사용자 지정 전압 (V)
         
         Returns:
             전압 강하 계산 결과
         """
         # 전압 결정
-        if is_high_voltage:
+        if voltage_override is not None and voltage_override > 0:
+            nominal_voltage = voltage_override
+            # 전압 레벨에 따른 허용 한계 자동 설정
+            if nominal_voltage >= 1000:
+                limit_percent = settings.VOLTAGE_DROP_LIMIT_HV
+            else:
+                limit_percent = settings.VOLTAGE_DROP_LIMIT_LV
+        elif is_high_voltage:
             nominal_voltage = self.voltage_hv
             limit_percent = settings.VOLTAGE_DROP_LIMIT_HV
         elif phase_type == "3":

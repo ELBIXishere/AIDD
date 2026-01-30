@@ -70,6 +70,27 @@ app.add_middleware(
 app.include_router(router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 
+@app.on_event("startup")
+async def startup_event():
+    """서버 기동 시 데이터 캐시 예열 (Warm-up)"""
+    import asyncio
+    from app.core.wfs_client import WFSClient
+    from app.core.preprocessor import DataPreprocessor
+    
+    print("--- [Warm-up] 초기 데이터 캐시 예열 시작 ---")
+    try:
+        wfs_client = WFSClient()
+        # 충주 중앙부 기본 좌표 (사용자가 처음 보게 될 위치)
+        cx, cy = 14242500, 4432200
+        
+        # 백그라운드에서 초기 데이터 로드 및 계통 분석 수행
+        raw_data = await wfs_client.get_all_data(cx, cy, settings.BBOX_SIZE)
+        preprocessor = DataPreprocessor()
+        preprocessor.process(raw_data)
+        
+        print(f"--- [Warm-up] 예열 완료: 전주 {len(raw_data['poles'])}개 로드됨 ---")
+    except Exception as e:
+        print(f"--- [Warm-up] 예열 중 오류 (무시): {e} ---")
 
 @app.get("/")
 async def root():

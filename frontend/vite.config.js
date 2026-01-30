@@ -7,6 +7,7 @@ export default defineConfig({
     host: '0.0.0.0',  // 외부 접속 허용
     port: 3000,
     strictPort: true,  // 포트 고정 (3000 사용 불가 시 에러)
+    allowedHosts: ['stlogic.iptime.org'], // 외부 호스트 허용
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',

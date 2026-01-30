@@ -150,19 +150,17 @@ class DesignEngine:
             logger.info(f"후보 전주: {len(selection_result.targets)}개")
             
             # Fast Track 체크
-            if selection_result.fast_track_target:
-                logger.info(
-                    f"Fast Track 가능: {selection_result.fast_track_target.id} "
-                    f"({selection_result.fast_track_target.distance_to_consumer:.1f}m)"
-                )
+            if selection_result.fast_track_targets:
+                logger.info(f"Fast Track 후보: {len(selection_result.fast_track_targets)}개 발견")
             
             # Phase 4: 도로 없으면 Fast Track만 처리
             if not processed_data.roads:
-                if selection_result.fast_track_target:
+                if selection_result.fast_track_targets:
                     return self._create_fast_track_response(
                         consumer_coord, phase_code,
-                        selection_result.fast_track_target,
-                        start_time, requested_load_kw
+                        selection_result.fast_track_targets,
+                        start_time, requested_load_kw,
+                        processed_data
                     )
                 else:
                     return DesignResponse(
@@ -215,8 +213,11 @@ class DesignEngine:
             line_validator = LineValidator(processed_data)
             valid_paths = []
             
+            # 신설 선로 타입 결정 (높이 추정용)
+            new_line_type = "HV" if phase_code == settings.PHASE_THREE else "LV"
+            
             for path in pathfinding_result.paths:
-                validation = line_validator.validate_path(path.path_coords)
+                validation = line_validator.validate_path(path.path_coords, new_line_type=new_line_type)
                 if validation.is_valid:
                     valid_paths.append(path)
                 else:
@@ -314,54 +315,67 @@ class DesignEngine:
         self,
         consumer_coord: Tuple[float, float],
         phase_code: str,
-        fast_track_target,
+        fast_track_targets: List,
         start_time: float,
-        requested_load_kw: float
+        requested_load_kw: float,
+        processed_data: ProcessedData = None
     ) -> DesignResponse:
-        """Fast Track 응답 생성"""
-        distance = fast_track_target.distance_to_consumer
-        wire_cost = int(distance * settings.COST_WIRE_LV)
-        labor_cost = settings.COST_LABOR_BASE
-        total_cost = wire_cost + labor_cost
-        
-        # 전압 강하 계산
-        vd_result = self.voltage_calculator.calculate(
-            distance=distance,
-            load_kw=requested_load_kw,
-            phase_type=phase_code,
-            wire_type=WireType.OW_22
-        )
-        
-        voltage_drop = VoltageDropInfo(
-            distance_m=distance,
-            load_kw=requested_load_kw,
-            voltage_drop_v=vd_result.voltage_drop_v,
-            voltage_drop_percent=vd_result.voltage_drop_percent,
-            is_acceptable=vd_result.is_acceptable,
-            limit_percent=vd_result.limit_percent,
-            wire_spec="OW_22",
-            message=vd_result.message
-        )
-        
-        route = RouteResult(
-            rank=1,
-            total_cost=total_cost,
-            total_distance=distance,
-            start_pole_id=fast_track_target.id,
-            start_pole_coord=[fast_track_target.coord[0], fast_track_target.coord[1]],
-            new_poles_count=0,
-            path_coordinates=[
-                [consumer_coord[0], consumer_coord[1]],
-                [fast_track_target.coord[0], fast_track_target.coord[1]]
-            ],
-            new_pole_coordinates=[],
-            wire_cost=wire_cost,
-            pole_cost=0,
-            labor_cost=labor_cost,
-            remark="FastTrack - 50m 이내 직접 연결",
-            voltage_drop=voltage_drop,
-            wire_spec="OW_22"
-        )
+        """다중 Fast Track 응답 생성 (도로가 없는 경우)"""
+        routes = []
+        for i, target in enumerate(fast_track_targets):
+            distance = target.distance_to_consumer
+            wire_cost = int(distance * settings.COST_WIRE_LV)
+            labor_cost = settings.COST_LABOR_BASE
+            total_cost = wire_cost + labor_cost
+            
+            # 전압값 확인
+            voltage_override = None
+            if hasattr(target, 'voltage') and target.voltage:
+                 voltage_override = target.voltage
+            elif hasattr(target, 'pole') and target.pole.voltage:
+                 voltage_override = target.pole.voltage
+
+            # 전압 강하 계산
+            vd_result = self.voltage_calculator.calculate(
+                distance=distance,
+                load_kw=requested_load_kw,
+                phase_type=phase_code,
+                wire_type=WireType.OW_22,
+                voltage_override=voltage_override
+            )
+            
+            voltage_drop = VoltageDropInfo(
+                distance_m=distance,
+                load_kw=requested_load_kw,
+                voltage_drop_v=vd_result.voltage_drop_v,
+                voltage_drop_percent=vd_result.voltage_drop_percent,
+                is_acceptable=vd_result.is_acceptable,
+                limit_percent=vd_result.limit_percent,
+                wire_spec="OW_22",
+                message=vd_result.message
+            )
+            
+            route = RouteResult(
+                rank=i + 1,
+                total_cost=total_cost,
+                cost_index=int(distance), # Fast Track은 거리가 곧 인덱스
+                total_distance=distance,
+                start_pole_id=target.id,
+                start_pole_coord=[target.coord[0], target.coord[1]],
+                new_poles_count=0,
+                path_coordinates=[
+                    [consumer_coord[0], consumer_coord[1]],
+                    [target.coord[0], target.coord[1]]
+                ],
+                new_pole_coordinates=[],
+                wire_cost=wire_cost,
+                pole_cost=0,
+                labor_cost=labor_cost,
+                remark="FastTrack - 40m 이내 직접 연결",
+                voltage_drop=voltage_drop,
+                wire_spec="OW_22"
+            )
+            routes.append(route)
         
         elapsed_time = int((time.time() - start_time) * 1000)
         
@@ -369,7 +383,7 @@ class DesignEngine:
             status=DesignStatus.SUCCESS,
             request_spec=self._get_phase_name(phase_code),
             consumer_coord=[consumer_coord[0], consumer_coord[1]],
-            routes=[route],
+            routes=routes,
             processing_time_ms=elapsed_time,
             requested_load_kw=requested_load_kw
         )
@@ -400,12 +414,20 @@ class DesignEngine:
                     pole_line_map[line.end_pole_id].append(line)
         
         for cost_result in cost_results:
+            # 기설 전주 전압값 조회
+            voltage_override = None
+            if cost_result.start_pole_id and cost_result.start_pole_id in pole_map:
+                start_pole = pole_map[cost_result.start_pole_id]
+                if start_pole.voltage:
+                    voltage_override = start_pole.voltage
+
             # 전압 강하 계산
             vd_result = self.voltage_calculator.calculate(
                 distance=cost_result.total_distance,
                 load_kw=requested_load_kw,
                 phase_type=phase_code,
-                wire_type=WireType.OW_22
+                wire_type=WireType.OW_22,
+                voltage_override=voltage_override  # [NEW] 실제 전압값 적용
             )
             
             voltage_drop = VoltageDropInfo(
@@ -484,22 +506,14 @@ class DesignEngine:
                     total=db.total_cost
                 )
             
-            # 기설 전주의 전압/상 정보 조회
-            source_voltage_type = None
-            source_phase_type = None
+            # 기설 전주의 전압/상 정보 조회 (복원된 계통 정보 활용)
+            source_voltage_type = "LV" # 기본값
+            source_phase_type = "1"
             
-            if cost_result.start_pole_id and cost_result.start_pole_id in pole_line_map:
-                connected_lines = pole_line_map[cost_result.start_pole_id]
-                # 연결된 전선 중 고압선이 있는지 확인
-                has_hv_line = any(line.is_high_voltage for line in connected_lines)
-                # 연결된 전선 중 3상선이 있는지 확인
-                has_3phase_line = any(
-                    line.phase_code == settings.PHASE_THREE 
-                    for line in connected_lines
-                )
-                
-                source_voltage_type = "HV" if has_hv_line else "LV"
-                source_phase_type = "3" if has_3phase_line else "1"
+            if cost_result.start_pole_id and cost_result.start_pole_id in pole_map:
+                pole_obj = pole_map[cost_result.start_pole_id]
+                source_voltage_type = "HV" if pole_obj.pole_type == "H" else "LV"
+                source_phase_type = pole_obj.phase_code or "1"
             
             route = RouteResult(
                 rank=cost_result.rank,
